@@ -1,0 +1,8 @@
+name = Election OpenSTV Integration
+description = "Count the results of a ranked-choice election using OpenSTV."
+package = Election
+core = 7.x
+dependencies[] = election
+dependencies[] = election_post
+dependencies[] = election_results
+dependencies[] = election_export

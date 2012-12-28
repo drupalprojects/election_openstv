@@ -1,0 +1,194 @@
+<?php
+/**
+ * @file
+ * Main file for the Election OpenSTV Integration module.
+ */
+
+/**
+ * Implements hook_election_results_page_alter().
+ */
+function election_openstv_election_results_page_alter(&$output, $post, $totals) {
+  if (election_openstv_check_support($post->election)) {
+    $output['openstv'] = drupal_get_form('election_openstv_form', $post);
+  }
+}
+
+/**
+ * Check whether an election supports OpenSTV counting.
+ */
+function election_openstv_check_support($election) {
+  return election_export_check_support($election);
+}
+
+/**
+ * Form for counting an election's results with OpenSTV.
+ */
+function election_openstv_form($form, &$form_state, stdClass $post) {
+
+  $election = $post->election;
+
+  $form['#post'] = $post;
+  $form['#election'] = $election;
+
+  $form['method'] = array(
+    '#type' => 'select',
+    '#title' => t('OpenSTV count method'),
+    '#options' => drupal_map_assoc(_election_openstv_get_methods()),
+    '#required' => TRUE,
+  );
+
+  $form['buttons'] = array(
+    '#type' => 'actions',
+    '#weight' => 100,
+  );
+  $form['buttons']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Count'),
+  );
+
+  if (!empty($form_state['result'])) {
+    $form['result'] = array(
+      '#markup' => '<h2>OpenSTV output</h2><div class="election-count-openstv-result">' . $form_state['result'] . '</div>',
+      '#weight' => 101,
+    );
+  }
+
+  return $form;
+
+}
+
+/**
+ * Submit function for the form election_openstv_form().
+ */
+function election_openstv_form_submit($form, &$form_state) {
+
+  $post = $form['#post'];
+  $method = $form_state['values']['method'];
+
+  $result = election_openstv_count($post, $method, 'HtmlReport');
+
+  if (empty($result)) {
+    drupal_set_message(t('An error occurred while counting.'), 'error');
+    $form_state['rebuild'] = TRUE;
+    return;
+  }
+
+  $form_state['rebuild'] = TRUE;
+  $form_state['result'] = _election_openstv_sanitize_html_report($result);
+
+}
+
+/**
+ * Count results for a post.
+ */
+function election_openstv_count($post, $method, $output_format = 'TextReport') {
+  // Export the results into a ballot file. We specify a temporary filename
+  // rather than use drupal_tempnam(), because OpenSTV only accepts files with a
+  // .blt extension.
+  $export_destination = 'temporary://election-count-' . (int) $post->post_id . '.blt';
+  $export_filename = election_export_post($post, $export_destination);
+
+  // Get the absolute system path to the file.
+  $export_filename = drupal_realpath($export_filename);
+
+  // Build the OpenSTV command.
+  $openstv_path = '/usr/share/openstv/openstv/runElection.py';
+  $cmd = 'python ';
+  $cmd .= escapeshellarg($openstv_path);
+  $cmd .= ' -r ' . escapeshellarg($output_format);
+  $cmd .= ' ' . escapeshellarg($method);
+  $cmd .= ' ' . escapeshellarg($export_filename);
+
+  // Run the OpenSTV command and capture the results.
+  $result = shell_exec($cmd);
+
+  // Delete the temporary export file.
+  unlink($export_filename);
+
+  if (empty($result)) {
+    return FALSE;
+  }
+
+  return $result;
+}
+
+/**
+ * Sanitize and format the HTML produced by OpenSTV for display.
+ */
+function _election_openstv_sanitize_html_report($str) {
+  // Start output from 'OpenSTV...' (to cut out the HTML head).
+  if ($start = strpos($str, 'OpenSTV')) {
+    $str = substr($str, $start);
+  }
+  // Remove any <style> blocks.
+  $str = preg_replace('/<style[^>]*>[^<]*<\/style>/i', '', $str);
+  // Strip out most tags.
+  $str = strip_tags($str, '<p><b><i><strong><em><table><thead><tbody><tr><th><td>');
+  // Replace pairs of ' with ".
+  $str = preg_replace('/\'([^\']+)\'/', '"$1"', $str);
+  // Run any enabled filters for Full HTML or the fallback text format.
+  $str = check_markup($str, 'full_html');
+  return $str;
+}
+
+/**
+ * Get a list of valid OpenSTV counting methods.
+ */
+function _election_openstv_get_methods() {
+  return array(
+    'Approval',
+    'Borda',
+    'Bucklin',
+    'CambridgeSTV',
+    'Condorcet',
+    'Coombs',
+    'ERS97STV',
+    'FTSTV',
+    'GPCA2000STV',
+    'IRV',
+    'MeekNZSTV',
+    'MeekQXSTV',
+    'MeekSTV',
+    'MinneapolisSTV',
+    'NIrelandSTV',
+    'QPQ',
+    'RTSTV',
+    'SNTV',
+    'ScottishSTV',
+    'SuppVote',
+    'WarrenQXSTV',
+    'WarrenSTV',
+  );
+}
+
+/**
+ * Get a list of valid OpenSTV output formats.
+ */
+function _election_openstv_get_output_formats() {
+  return array(
+    'CsvReport',
+    'HtmlReport',
+    'MinimalReport',
+    'TextReport',
+    'YamlReport',
+  );
+}
+
+/**
+ * Find out if OpenSTV is installed.
+ */
+function _election_openstv_which() {
+  $path_to_openstv = '/usr/share/openstv/openstv/runElection.py';
+  if (substr($path_to_openstv, -3) == '.py') {
+    $openstv_cmd = 'python';
+  }
+  else {
+    $openstv_cmd = $path_to_openstv;
+  }
+  $cmd = 'which ' . escapeshellarg($openstv_cmd);
+  $output = shell_exec($cmd);
+  if (empty($output)) {
+    return FALSE;
+  }
+  return $output;
+}
