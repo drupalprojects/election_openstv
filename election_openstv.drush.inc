@@ -10,7 +10,7 @@
 function election_openstv_drush_command() {
   $items = array();
   $items['election-openstv'] = array(
-    'description' => 'Counts the results of an election post using OpenSTV.',
+    'description' => 'Counts the results of an election post using OpenSTV. The report is printed to STDOUT.',
     'arguments' => array(
       'post_id' => 'The ID of the election post (required).',
       'method' => 'The count method (default: ERS97STV).',
@@ -53,8 +53,9 @@ function drush_election_openstv($post_id, $method = 'ERS97STV', $output_format =
     return drush_set_error(dt('The output format "@format" was not found.', array('@format' => $output_format)));;
   }
   // Check that OpenSTV is installed.
-  if (!_election_openstv_which()) {
-    return drush_set_error(dt('OpenSTV is not installed.'));
+  $command = _election_openstv_get_command();
+  if (!_election_openstv_executable($command)) {
+    return drush_set_error(dt('The configured OpenSTV command (@command) cannot be executed. Is OpenSTV installed?', array('@command' => $command)));
   }
   // Run the count.
   echo election_openstv_count($post, $method, $output_format);

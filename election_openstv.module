@@ -5,12 +5,55 @@
  */
 
 /**
- * Implements hook_election_results_page_alter().
+ * Implements hook_menu().
  */
-function election_openstv_election_results_page_alter(&$output, $post, $totals) {
-  if (election_openstv_check_support($post->election)) {
-    $output['openstv'] = drupal_get_form('election_openstv_form', $post);
+function election_openstv_menu() {
+  $items = array();
+  $items['election-post/%election_post/results/openstv'] = array(
+    'title' => 'OpenSTV',
+    'description' => 'Count results with OpenSTV',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('election_openstv_form', 1),
+    'access callback' => 'election_openstv_access',
+    'access arguments' => array('count', 1),
+    'type' => MENU_LOCAL_TASK,
+    'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
+    'weight' => 1,
+  );
+  $items['admin/config/election/openstv'] = array(
+    'title' => 'OpenSTV integration settings',
+    'description' => 'Configure settings for integration with the OpenSTV (openstv.org) vote counting software.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('election_openstv_config'),
+    'access arguments' => array('administer election_openstv'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function election_openstv_permission() {
+  return array(
+    'administer election_openstv' => array(
+      'title' => t('Administer OpenSTV integration.'),
+      'restrict access' => TRUE,
+    ),
+  );
+}
+
+/**
+ * Access callback function for running an OpenSTV count.
+ */
+function election_openstv_access($op, $post, $account = NULL) {
+  if ($op != 'count') {
+    return FALSE;
   }
+  if (!election_openstv_check_support($post->election)) {
+    return FALSE;
+  }
+  return election_results_access('view', $post, $account);
 }
 
 /**
@@ -24,6 +67,8 @@ function election_openstv_check_support($election) {
  * Form for counting an election's results with OpenSTV.
  */
 function election_openstv_form($form, &$form_state, stdClass $post) {
+
+  drupal_set_title(t('OpenSTV: %post', array('%post' => $post->title)), PASS_THROUGH);
 
   $election = $post->election;
 
@@ -92,9 +137,7 @@ function election_openstv_count($post, $method, $output_format = 'TextReport') {
   $export_filename = drupal_realpath($export_filename);
 
   // Build the OpenSTV command.
-  $openstv_path = '/usr/share/openstv/openstv/runElection.py';
-  $cmd = 'python ';
-  $cmd .= escapeshellarg($openstv_path);
+  $cmd = escapeshellcmd(_election_openstv_get_command());
   $cmd .= ' -r ' . escapeshellarg($output_format);
   $cmd .= ' ' . escapeshellarg($method);
   $cmd .= ' ' . escapeshellarg($export_filename);
@@ -110,6 +153,38 @@ function election_openstv_count($post, $method, $output_format = 'TextReport') {
   }
 
   return $result;
+}
+
+/**
+ * The system settings form for the module.
+ */
+function election_openstv_config($form, &$form_state) {
+  $form['help'] = array(
+    '#markup' => t('Configure the command used to run OpenSTV in your system.')
+      . ' ' . t('Example commands: <ul><li>openstv-run-election</li><li>python /usr/share/openstv/openstv/runElection.py</li><li>python /var/www/mysite/sites/all/libraries/openstv/runElection.py</li></ul>'),
+  );
+  $form['election_openstv_command'] = array(
+    '#type' => 'textfield',
+    '#title' => t('OpenSTV command'),
+    '#default_value' => _election_openstv_get_command(),
+    '#required' => TRUE,
+  );
+  return system_settings_form($form);
+}
+
+/**
+ * Validate the system settings form.
+ */
+function election_openstv_config_validate($form, &$form_state) {
+  $openstv_command = $form_state['values']['election_openstv_command'];
+  // Trim whitespace around the command.
+  $openstv_command = trim($openstv_command);
+  // Check that it can be executed.
+  if (!_election_openstv_executable($openstv_command)) {
+    drupal_set_message(t('The command %command does not look like it can be executed. Check the configuration.', array('%command' => $openstv_command)), 'warning');
+  }
+  // Save the trimmed value.
+  $form_state['values']['election_openstv_command'] = $openstv_command;
 }
 
 /**
@@ -175,20 +250,26 @@ function _election_openstv_get_output_formats() {
 }
 
 /**
- * Find out if OpenSTV is installed.
+ * Get the OpenSTV command.
  */
-function _election_openstv_which() {
-  $path_to_openstv = '/usr/share/openstv/openstv/runElection.py';
-  if (substr($path_to_openstv, -3) == '.py') {
-    $openstv_cmd = 'python';
-  }
-  else {
-    $openstv_cmd = $path_to_openstv;
-  }
-  $cmd = 'which ' . escapeshellarg($openstv_cmd);
-  $output = shell_exec($cmd);
-  if (empty($output)) {
+function _election_openstv_get_command() {
+  return variable_get('election_openstv_command', 'openstv-run-election');
+}
+
+/**
+ * Find out whether OpenSTV can be executed with the configured command.
+ */
+function _election_openstv_executable($command) {
+  $command_parts = explode(' ', $command);
+  $command_name = reset($command_parts);
+  $which = shell_exec('which ' . escapeshellarg($command_name));
+  if (empty($which)) {
     return FALSE;
   }
-  return $output;
+  // If the command format is something like "/usr/bin/python filename.py",
+  // check whether the file exists and is readable.
+  if (strpos($command, 'python ') !== FALSE && ($filename = end($command_parts)) && !is_readable($filename)) {
+    return FALSE;
+  }
+  return TRUE;
 }
