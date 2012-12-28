@@ -181,7 +181,7 @@ function election_openstv_config_validate($form, &$form_state) {
   $openstv_command = trim($openstv_command);
   // Check that it can be executed.
   if (!_election_openstv_executable($openstv_command)) {
-    drupal_set_message(t('The command %command does not look like it can be executed. Check the configuration.', array('%command' => $openstv_command)), 'warning');
+    form_set_error('election_openstv_command', t('The command %command cannot be executed.', array('%command' => $openstv_command)));
   }
   // Save the trimmed value.
   $form_state['values']['election_openstv_command'] = $openstv_command;
@@ -199,8 +199,6 @@ function _election_openstv_sanitize_html_report($str) {
   $str = preg_replace('/<style[^>]*>[^<]*<\/style>/i', '', $str);
   // Strip out most tags.
   $str = strip_tags($str, '<p><b><i><strong><em><table><thead><tbody><tr><th><td>');
-  // Replace pairs of ' with ".
-  $str = preg_replace('/\'([^\']+)\'/', '"$1"', $str);
   // Run any enabled filters for Full HTML or the fallback text format.
   $str = check_markup($str, 'full_html');
   return $str;
