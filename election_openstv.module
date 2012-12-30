@@ -288,23 +288,6 @@ function election_openstv_config_validate($form, &$form_state) {
 }
 
 /**
- * Sanitize and format the HTML produced by OpenSTV for display.
- */
-function _election_openstv_sanitize_html_report($str) {
-  // Start output from 'OpenSTV...' (to cut out the HTML head).
-  if ($start = strpos($str, 'OpenSTV')) {
-    $str = substr($str, $start);
-  }
-  // Remove any <style> blocks.
-  $str = preg_replace('/<style[^>]*>[^<]*<\/style>/i', '', $str);
-  // Strip out most tags.
-  $str = strip_tags($str, '<p><b><i><strong><em><table><thead><tbody><tr><th><td>');
-  // Run any enabled filters for Full HTML or the fallback text format.
-  $str = check_markup($str, 'full_html');
-  return $str;
-}
-
-/**
  * Get a list of valid OpenSTV counting methods.
  */
 function _election_openstv_get_methods() {
