@@ -9,12 +9,23 @@
  */
 function election_openstv_menu() {
   $items = array();
+  $items['election/%election/openstv'] = array(
+    'title' => 'OpenSTV',
+    'description' => 'Count results with OpenSTV (in bulk)',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('election_openstv_form', 1),
+    'access callback' => 'election_openstv_access',
+    'access arguments' => array('count', 1),
+    'type' => MENU_LOCAL_TASK,
+    'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
+    'weight' => 7,
+  );
   $items['election-post/%election_post/results/openstv'] = array(
     'title' => 'OpenSTV',
     'description' => 'Count results with OpenSTV',
     'page callback' => 'drupal_get_form',
-    'page arguments' => array('election_openstv_form', 1),
-    'access callback' => 'election_openstv_access',
+    'page arguments' => array('election_openstv_form', 1, 'election_post'),
+    'access callback' => 'election_openstv_access_post',
     'access arguments' => array('count', 1),
     'type' => MENU_LOCAL_TASK,
     'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
@@ -37,8 +48,12 @@ function election_openstv_menu() {
 function election_openstv_permission() {
   return array(
     'administer election_openstv' => array(
-      'title' => t('Administer OpenSTV integration.'),
+      'title' => t('Administer OpenSTV integration'),
       'restrict access' => TRUE,
+    ),
+    'use openstv' => array(
+      'title' => t('Use OpenSTV'),
+      'description' => t("Allows the user to count an election's results with OpenSTV, if they have access to the election."),
     ),
   );
 }
@@ -46,14 +61,30 @@ function election_openstv_permission() {
 /**
  * Access callback function for running an OpenSTV count.
  */
-function election_openstv_access($op, $post, $account = NULL) {
+function election_openstv_access($op, $election, $account = NULL) {
   if ($op != 'count') {
     return FALSE;
   }
-  if (!election_openstv_check_support($post->election)) {
+  if (!election_openstv_check_support($election)) {
     return FALSE;
   }
-  return election_results_access('view', $post, $account);
+  if (!election_access('view', $election, $account)) {
+    return FALSE;
+  }
+  if (_election_is_open($election->vstatus, $election->vopen_time, $election->vclose_time) && !user_access('bypass running election lock', $account)) {
+    return FALSE;
+  }
+  if (!user_access('use openstv', $account)) {
+    return FALSE;
+  }
+  return TRUE;
+}
+
+/**
+ * Access callback function per election post.
+ */
+function election_openstv_access_post($op, $post, $account = NULL) {
+  return election_openstv_access($op, $post->election, $account);
 }
 
 /**
@@ -64,21 +95,36 @@ function election_openstv_check_support($election) {
 }
 
 /**
- * Form for counting an election's results with OpenSTV.
+ * Form for counting results with OpenSTV.
  */
-function election_openstv_form($form, &$form_state, stdClass $post) {
+function election_openstv_form($form, &$form_state, stdClass $entity, $entity_type = 'election') {
 
-  drupal_set_title(t('OpenSTV: %post', array('%post' => $post->title)), PASS_THROUGH);
-
-  $election = $post->election;
-
-  $form['#post'] = $post;
-  $form['#election'] = $election;
+  switch ($entity_type) {
+    case 'election_post':
+      $post = $entity;
+      $election = $post->election;
+      drupal_set_title(t('OpenSTV: %post', array('%post' => $post->title)), PASS_THROUGH);
+      $form['#election'] = $election;
+      $form['#post'] = $post;
+      break;
+    case 'election':
+      $election = $entity;
+      drupal_set_title(t('OpenSTV: %election', array('%election' => $election->title)), PASS_THROUGH);
+      $form['#election'] = $election;
+      break;
+  }
 
   $form['method'] = array(
     '#type' => 'select',
     '#title' => t('OpenSTV count method'),
-    '#options' => drupal_map_assoc(_election_openstv_get_methods()),
+    '#options' => _election_openstv_get_methods(),
+    '#required' => TRUE,
+  );
+
+  $form['output_format'] = array(
+    '#type' => 'select',
+    '#title' => t('Output format'),
+    '#options' => _election_openstv_get_output_formats(),
     '#required' => TRUE,
   );
 
@@ -91,13 +137,6 @@ function election_openstv_form($form, &$form_state, stdClass $post) {
     '#value' => t('Count'),
   );
 
-  if (!empty($form_state['result'])) {
-    $form['result'] = array(
-      '#markup' => '<h2>OpenSTV output</h2><div class="election-count-openstv-result">' . $form_state['result'] . '</div>',
-      '#weight' => 101,
-    );
-  }
-
   return $form;
 
 }
@@ -107,26 +146,52 @@ function election_openstv_form($form, &$form_state, stdClass $post) {
  */
 function election_openstv_form_submit($form, &$form_state) {
 
-  $post = $form['#post'];
+  $election = $form['#election'];
   $method = $form_state['values']['method'];
+  $output_format = $form_state['values']['output_format'];
 
-  $result = election_openstv_count($post, $method, 'HtmlReport');
+  $error = FALSE;
 
-  if (empty($result)) {
-    drupal_set_message(t('An error occurred while counting.'), 'error');
-    $form_state['rebuild'] = TRUE;
-    return;
+  if (!empty($form['#post'])) {
+    $post = $form['#post'];
+    $filename = $post->title . '-' . $method . '-' . $output_format;
+    $filename = truncate_utf8(preg_replace('/[^A-Z0-9\-_]+/i', '-', $filename), 60, FALSE, FALSE);
+    $filename .= _election_openstv_get_extension($output_format);
+    $output = election_openstv_count_post($post, $method, $output_format);
+    if (empty($output)) {
+      drupal_set_message(t('An error occurred while counting.'), 'error');
+      $form_state['rebuild'] = TRUE;
+      return;
+    }
+    _election_openstv_set_content_type($output_format);
+    drupal_add_http_header('Content-Disposition', 'attachment;filename=' . $filename);
+    drupal_add_http_header('Cache-Control', 'max-age=0; must-revalidate');
+    echo $output;
+  }
+  else {
+    $zip_file = election_openstv_count_election($election, $method, $output_format);
+    if (empty($zip_file)) {
+      drupal_set_message(t('An error occurred while counting.'), 'error');
+      $form_state['rebuild'] = TRUE;
+      return;
+    }
+    $filename = $election->title . '-' . $method . '-' . $output_format;
+    $filename = truncate_utf8(preg_replace('/[^A-Z0-9\-_]+/i', '-', $filename), 60, FALSE, FALSE);
+    drupal_add_http_header('Content-Type', 'application/zip;charset=UTF-8');
+    drupal_add_http_header('Content-Disposition', 'attachment;filename=' . $filename . '.zip');
+    drupal_add_http_header('Cache-Control', 'max-age=0; must-revalidate');
+    readfile($zip_file);
+    unlink($zip_file);
   }
 
-  $form_state['rebuild'] = TRUE;
-  $form_state['result'] = _election_openstv_sanitize_html_report($result);
+  drupal_exit();
 
 }
 
 /**
  * Count results for a post.
  */
-function election_openstv_count($post, $method, $output_format = 'TextReport') {
+function election_openstv_count_post($post, $method, $output_format = 'TextReport') {
   // Export the results into a ballot file. We specify a temporary filename
   // rather than use drupal_tempnam(), because OpenSTV only accepts files with a
   // .blt extension.
@@ -153,6 +218,41 @@ function election_openstv_count($post, $method, $output_format = 'TextReport') {
   }
 
   return $result;
+}
+
+/**
+ * Count results in bulk for an entire election and wrap into a ZIP archive.
+ *
+ * @return string
+ *   The full pathname to the ZIP archive.
+ */
+function election_openstv_count_election($election, $method, $output_format = 'CsvReport', $destination = NULL) {
+  if (empty($destination)) {
+    $destination = drupal_tempnam('temporary://', 'election-openstv');
+  }
+  // The PHP ZipArchive utility requires absolute file system paths.
+  $destination_realpath = drupal_realpath($destination);
+  $zip = new ZipArchive();
+  $opened = $zip->open($destination_realpath, ZIPARCHIVE::CREATE);
+  if ($opened !== TRUE) {
+    return FALSE;
+  }
+  $post_ids = db_query(
+    'SELECT post_id FROM {election_post} WHERE election_id = :eid',
+    array(':eid' => $election->election_id)
+  )->fetchCol();
+  $posts = election_post_load_multiple($post_ids);
+  $extension = _election_openstv_get_extension($output_format);
+  foreach ($posts as $post) {
+    $localname = $post->title . '-' . $post->post_id . '-' . $method;
+    $localname = truncate_utf8(preg_replace('/[^A-Z0-9\-_]+/i', '-', $localname), 60, FALSE, FALSE);
+    $localname .= '.' . $extension;
+    if ($post_count = election_openstv_count_post($post, $method, $output_format)) {
+      $zip->addFromString($localname, $post_count);
+    }
+  }
+  $zip->close();
+  return $destination_realpath;
 }
 
 /**
@@ -209,28 +309,28 @@ function _election_openstv_sanitize_html_report($str) {
  */
 function _election_openstv_get_methods() {
   return array(
-    'Approval',
-    'Borda',
-    'Bucklin',
-    'CambridgeSTV',
-    'Condorcet',
-    'Coombs',
-    'ERS97STV',
-    'FTSTV',
-    'GPCA2000STV',
-    'IRV',
-    'MeekNZSTV',
-    'MeekQXSTV',
-    'MeekSTV',
-    'MinneapolisSTV',
-    'NIrelandSTV',
-    'QPQ',
-    'RTSTV',
-    'SNTV',
-    'ScottishSTV',
-    'SuppVote',
-    'WarrenQXSTV',
-    'WarrenSTV',
+    'Approval' => t('Approval Voting'),
+    'Borda' => t('Borda Count'),
+    'Bucklin' => t('Bucklin System'),
+    'CambridgeSTV' => t('Cambridge STV'),
+    'Condorcet' => t('Condorcet Voting'),
+    'Coombs' => t('Coombs Method'),
+    'ERS97STV' => t('ERS97 STV'),
+    'FTSTV' => t('Fractional Transfer STV'),
+    'GPCA2000STV' => t('GPCA 2000 STV'),
+    'IRV' => t('Instant-Runoff Voting (IRV)'),
+    'MeekNZSTV' => t('Meek NZ STV'),
+    'MeekQXSTV' => t('Meek QX STV'),
+    'MeekSTV' => t('Meek STV'),
+    'MinneapolisSTV' => t('Minneapolis STV'),
+    'NIrelandSTV' => t('N. Ireland STV'),
+    'QPQ' => t('QPQ (Quota-Preferential by Quotient)'),
+    'RTSTV' => t('Random Transfer STV'),
+    'SNTV' => t('Single Non-Transferable Vote (SNTV)'),
+    'ScottishSTV' => t('Scottish STV'),
+    'SuppVote' => t('Supplementary Vote'),
+    'WarrenQXSTV' => t('Warren QX STV'),
+    'WarrenSTV' => t('Warren STV'),
   );
 }
 
@@ -239,12 +339,54 @@ function _election_openstv_get_methods() {
  */
 function _election_openstv_get_output_formats() {
   return array(
-    'CsvReport',
-    'HtmlReport',
-    'MinimalReport',
-    'TextReport',
-    'YamlReport',
+    'CsvReport' => t('CSV (comma-separated values)'),
+    'HtmlReport' => t('HTML'),
+    'MinimalReport' => t('Minimal text'),
+    'TextReport' => t('Text'),
+    'YamlReport' => t('YAML'),
   );
+}
+
+/**
+ * Get a good file extension for the given output format.
+ */
+function _election_openstv_get_extension($output_format) {
+  switch ($output_format) {
+    case 'CsvReport':
+      $extension = '.csv';
+      break;
+    case 'HtmlReport':
+      $extension = '.html';
+      break;
+    case 'YamlReport':
+      $extension = '.yaml';
+      break;
+    default:
+      $extension = '.txt';
+      break;
+  }
+  return $extension;
+}
+
+/**
+ * Set the correct HTTP Content-Type header for the given OpenSTV output format.
+ */
+function _election_openstv_set_content_type($output_format) {
+  switch ($output_format) {
+    case 'CsvReport':
+      $content_type = 'text/csv; charset=utf-8';
+      break;
+    case 'HtmlReport':
+      $content_type = 'text/html; charset=utf-8';
+      break;
+    case 'YamlReport':
+      $content_type = 'text/yaml; charset=utf-8';
+      break;
+    default:
+      $content_type = 'text/plain; charset=utf-8';
+      break;
+  }
+  drupal_add_http_header('Content-Type', $content_type);
 }
 
 /**
