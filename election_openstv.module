@@ -246,7 +246,7 @@ function election_openstv_count_election($election, $method, $output_format = 'C
   foreach ($posts as $post) {
     $localname = $post->title . '-' . $post->post_id . '-' . $method;
     $localname = truncate_utf8(preg_replace('/[^A-Z0-9\-_]+/i', '-', $localname), 60, FALSE, FALSE);
-    $localname .= '.' . $extension;
+    $localname .= $extension;
     if ($post_count = election_openstv_count_post($post, $method, $output_format)) {
       $zip->addFromString($localname, $post_count);
     }
