@@ -157,9 +157,9 @@ function election_openstv_form_submit($form, &$form_state) {
     $filename = $post->title . '-' . $method . '-' . $output_format;
     $filename = truncate_utf8(preg_replace('/[^A-Z0-9\-_]+/i', '-', $filename), 60, FALSE, FALSE);
     $filename .= _election_openstv_get_extension($output_format);
-    $output = election_openstv_count_post($post, $method, $output_format);
+    $output = election_openstv_count_post($post, $method, $output_format, $error);
     if (empty($output)) {
-      drupal_set_message(t('An error occurred while counting.'), 'error');
+      drupal_set_message(t('An error occurred while counting: <pre>@error</pre>', array('@error' => $error)), 'error');
       $form_state['rebuild'] = TRUE;
       return;
     }
@@ -190,8 +190,18 @@ function election_openstv_form_submit($form, &$form_state) {
 
 /**
  * Count results for a post.
+ *
+ * @param stdClass $post
+ *   The election post object.
+ * @param string $method
+ *   The OpenSTV counting method - see _election_openstv_get_methods().
+ * @param string $output_format
+ *   The OpenSTV output format (default: 'TextReport') - see
+ *   _election_openstv_get_output_formats().
+ * @param string &$error
+ *   The error output (STDERR) from the OpenSTV command, if any.
  */
-function election_openstv_count_post($post, $method, $output_format = 'TextReport') {
+function election_openstv_count_post($post, $method, $output_format = 'TextReport', &$error = NULL) {
   // Export the results into a ballot file. We specify a temporary filename
   // rather than use drupal_tempnam(), because OpenSTV only accepts files with a
   // .blt extension.
@@ -207,8 +217,23 @@ function election_openstv_count_post($post, $method, $output_format = 'TextRepor
   $cmd .= ' ' . escapeshellarg($method);
   $cmd .= ' ' . escapeshellarg($export_filename);
 
-  // Run the OpenSTV command and capture the results.
-  $result = shell_exec($cmd);
+  $descriptorspec = array(
+    0 => array('pipe', 'r'),
+    1 => array('pipe', 'w'),
+    2 => array('pipe', 'w'),
+  );
+
+  // Run the OpenSTV command, capturing the result and any errors.
+  $process = proc_open($cmd, $descriptorspec, $pipes);
+  $result = stream_get_contents($pipes[1]);
+  $error = stream_get_contents($pipes[2]);
+  fclose($pipes[1]);
+  fclose($pipes[2]);
+  proc_close($process);
+
+  if (!empty($error)) {
+    watchdog('election_openstv', $error, NULL, WATCHDOG_ERROR);
+  }
 
   // Delete the temporary export file.
   unlink($export_filename);
