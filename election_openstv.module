@@ -401,7 +401,25 @@ function _election_openstv_set_content_type($output_format) {
  * Get the OpenSTV command.
  */
 function _election_openstv_get_command() {
-  return variable_get('election_openstv_command', 'openstv-run-election');
+  $configured = variable_get('election_openstv_command');
+  if (isset($configured)) {
+    return $configured;
+  }
+  // Work out what the default command should be, if nothing is configured.
+  $default = 'openstv-run-elecction';
+  // Check whether OpenSTV exists in the libraries folder.
+  if (function_exists('libraries_get_path')) {
+    $openstv_path = libraries_get_path('openstv');
+    if ($openstv_path) {
+      $run_election_path = drupal_realpath($openstv_path . '/runElection.py');
+      if (is_readable($run_election_path)) {
+        $which_python = shell_exec('which python');
+        $python = !empty($which_python) ? $which_python : 'python';
+        $default = $python . ' ' . $run_election_path;
+      }
+    }
+  }
+  return $default;
 }
 
 /**
@@ -410,14 +428,21 @@ function _election_openstv_get_command() {
 function _election_openstv_executable($command) {
   $command_parts = explode(' ', $command);
   $command_name = reset($command_parts);
-  $which = shell_exec('which ' . escapeshellarg($command_name));
-  if (empty($which)) {
-    return FALSE;
+  // Test whether the command name is an executable.
+  if (!is_executable($command_name)) {
+    // It still might be executable by the shell: test it with 'which'.
+    $which = shell_exec('which ' . escapeshellarg($command_name));
+    if (empty($which)) {
+      return FALSE;
+    }
   }
   // If the command format is something like "/usr/bin/python filename.py",
   // check whether the file exists and is readable.
-  if (strpos($command, 'python ') !== FALSE && ($filename = end($command_parts)) && !is_readable($filename)) {
-    return FALSE;
+  if (strpos($command_name, 'python ') !== FALSE) {
+    $filename = end($command_parts);
+    if (!is_readable($filename)) {
+      return FALSE;
+    }
   }
   return TRUE;
 }
