@@ -225,11 +225,16 @@ function election_openstv_count_post($post, $method, $output_format = 'TextRepor
 
   // Run the OpenSTV command, capturing the result and any errors.
   $process = proc_open($cmd, $descriptorspec, $pipes);
-  $result = stream_get_contents($pipes[1]);
-  $error = stream_get_contents($pipes[2]);
-  fclose($pipes[1]);
-  fclose($pipes[2]);
-  proc_close($process);
+  if ($process) {
+    $result = stream_get_contents($pipes[1]);
+    $error = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($process);
+  }
+  else {
+    $error = t('Failed to run the OpenSTV command: @cmd', array('@cmd' => $cmd));
+  }
 
   if (!empty($error)) {
     watchdog('election_openstv', $error, NULL, WATCHDOG_ERROR);
