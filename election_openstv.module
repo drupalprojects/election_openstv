@@ -443,7 +443,7 @@ function _election_openstv_executable($command) {
   }
   // If the command format is something like "/usr/bin/python filename.py",
   // check whether the file exists and is readable.
-  if (strpos($command_name, 'python ') !== FALSE) {
+  if (strpos($command_name, 'python') !== FALSE) {
     $filename = end($command_parts);
     if (!is_readable($filename)) {
       return FALSE;
