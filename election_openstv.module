@@ -415,7 +415,7 @@ function _election_openstv_get_command() {
     return $configured;
   }
   // Work out what the default command should be, if nothing is configured.
-  $default = 'openstv-run-elecction';
+  $default = 'openstv-run-election';
   // Check whether OpenSTV exists in the libraries folder.
   if (function_exists('libraries_get_path')) {
     $openstv_path = libraries_get_path('openstv');
